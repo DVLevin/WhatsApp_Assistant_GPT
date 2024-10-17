@@ -1,0 +1,61 @@
+--> Modify /check route in the  flask_gpt.py 
+
+```
+from whatsapp_integration import send_whatsapp_message  # Import the WhatsApp script
+
+@app.route('/check', methods=['POST'])
+def check_run_status():
+    """Checks the status of a message run and retrieves the assistant's response if completed.
+    
+    Optionally sends the response to a WhatsApp number if provided.
+
+    Expects a POST request with `thread_id`, `run_id`, and optionally `phone_number`.
+
+    Returns:
+        JSON: Response containing the assistant's message or status.
+    """
+    data = request.json
+    thread_id = data.get('thread_id')
+    run_id = data.get('run_id')
+    phone_number = data.get('phone_number')  # Optional phone number for WhatsApp integration
+
+    if not thread_id or not run_id:
+        return jsonify({"error": "Missing thread_id or run_id"}), 400
+
+    logger = initialize_logger(thread_id, "anonymous_user")
+    logger.info(f"Checking run status for thread ID {thread_id} and run ID {run_id}")
+    
+    start_time = time.time()
+    while time.time() - start_time < 8:  # Limit check duration to 8 seconds
+        run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
+
+        if run_status.status == 'completed':
+            messages = client.beta.threads.messages.list(thread_id=thread_id)
+            message_content = messages.data[0].content[0].text
+
+            # Remove annotations (if any)
+            annotations = message_content.annotations
+            for annotation in annotations:
+                message_content.value = message_content.value.replace(annotation.text, '')
+
+            logger.info(f"Run completed. Response: {message_content.value}")
+
+            # Check if phone_number is provided and send the message via WhatsApp
+            if phone_number:
+                logger.info(f"Sending response to WhatsApp number {phone_number}")
+                success = send_whatsapp_message(phone_number, message_content.value, logger)
+                if not success:
+                    return jsonify({"response": "Message failed to send via WhatsApp"}), 500
+            
+            return jsonify({"response": message_content.value, "status": "completed"})
+
+        if run_status.status == 'requires_action':
+            logger.info(f"Run requires action for thread ID {thread_id}.")
+            handle_required_actions(run_status, thread_id, run_id)
+
+        time.sleep(1)
+
+    logger.warning("Run timed out.")
+    return jsonify({"response": "timeout"})
+
+```
